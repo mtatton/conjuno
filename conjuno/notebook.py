@@ -4,15 +4,15 @@
 # MODULE : notebook
 #
 
+# curses
+import curses
+
 # python libraries import
 from asyncio import create_task, run, CancelledError, ensure_future, sleep
 from itertools import chain
 from os import environ, chdir, system
 from pathlib import Path
 from typing import List, Dict, Tuple, Any, Optional, cast
-import curses
-
-import curses
 
 # jupyter kernel
 from kernel_driver import driver as kdriver
@@ -90,6 +90,8 @@ class Notebook(Help, Format):
     mode: str
     keymap: None
     gmod: int
+    output_wrap: bool
+    lno: int
 
     def __init__(
         self,
@@ -163,6 +165,9 @@ class Notebook(Help, Format):
           self.update_layout()
           self.focus(0)
           self.gmod=0
+          #self.output_wrap=False
+          self.output_wrap=True
+          self.lno=True
 
     def set_language(self):
         self.kernel_name = self.json["metadata"]["kernelspec"]["name"]
@@ -200,6 +205,7 @@ class Notebook(Help, Format):
         if sum(self.pos)!=0:
           self.c.pads[POU].erase()
         self.c.pads[PSB].erase()
+        #self.c.scr.erase()
 
     def is_fullscreen(self):
       ret=0
@@ -300,7 +306,7 @@ class Notebook(Help, Format):
       #log(f'caller from class: {type(caller_instance).__name__}')  # → B
       #log(f'caller from method: {function}')  # → class_B_fun
       #log("[*] console.print_cell_output")
-      lno=0
+      self.lno=0
       linelen=0
       #self.print_cell_execution_count()
       #if len(text)==0:
@@ -332,13 +338,33 @@ class Notebook(Help, Format):
         self.c.render_ans(self.c.pads[POU],bin_text)
         self.c.pad_refresh(POU,0,0,1,0,self.c.he-1-10,self.c.wi-1)
       else:
-        for line in text.split('\n'):
+        if not self.output_wrap:
+          for line in text.split('\n'):
+            try:
+              self.c.pad_prn(POU,0+self.lno,0,line)
+            except:
+              break
+            self.lno+=1
+        else:
           try:
-            self.c.pad_prn(POU,0+lno,0,line)
-          except:
-            break
-          lno+=1
-      
+            self.lno=0
+            for ly, line in enumerate(text.split('\n')):
+              if self.lno>1:
+                if len(line)>self.c.wi:
+                  for wl in range(0,int(len(line)/self.c.wi)+1): # wrap line
+                    #if wl==0 and len(line)>0:
+                    #  line="+ "+line
+                    self.c.pad_prn(POU,0+self.lno,0,line[(self.c.wi)*wl:(self.c.wi)*(wl+1)])
+                    #self.c.pad_prn(POU,0+self.lno,0,str(ly)+" "+str(wl))
+                    self.lno+=1
+                else:
+                  self.c.pad_prn(POU,self.lno,0,line)
+                  self.lno+=1
+              else:
+                self.c.pad_prn(POU,self.lno,0,line)
+                self.lno+=1
+          except Exception as e:
+            log("[!] notebook.print_cell_output: "+str(e))
 
     async def run_all(self, mode=None):
         if self.kd:
@@ -451,6 +477,13 @@ class Notebook(Help, Format):
         self.layout_reset() 
         self.valid=0
 
+    def toggle_output_wrap(self):
+        if self.output_wrap:
+          self.output_wrap=False
+        else:
+          self.output_wrap=True
+        self.valid=0
+
     def switch_current_pad_fullscreen(self):
         if self.pad_active=="I":
           self.pis = [0,0,0,0,self.c.he-1,self.c.wi-1]
@@ -496,9 +529,11 @@ class Notebook(Help, Format):
               self.valid = 0
           elif self.pad_active=="O":
             xoh=self.current_cell.output_height
-            if self.yscr+self.c.he-1 < xoh:
+            if self.yscr+self.c.he-1 <= self.lno:
               self.yscr+=self.c.he-1
               self.pos = [self.yscr,self.lscr,0,0,self.c.he-1,self.c.wi-1]
+              self.clear_pads(False)
+              self.c.scr.refresh()
               self.valid = 0
 
     def fullscreen_scroll_left(self,shift=1):
@@ -603,12 +638,16 @@ class Notebook(Help, Format):
         self.keymap.bind(["L",curses.KEY_RIGHT], self.fullscreen_scroll_right, (self.c.wi-1,))
         #KS h, left - scroll fullscreen left
         self.keymap.bind(["h",curses.KEY_LEFT], self.fullscreen_scroll_left, ())
+        #KS m - toggle markdown cell
+        self.keymap.bind(["m"], self.toggle_markdown_cell, ())
         #KS l, right - scroll fullscreen right
         self.keymap.bind(["l",curses.KEY_RIGHT], self.fullscreen_scroll_right, ())
         #KS i - switch to input
         self.keymap.bind("i", self.switch_to_input, ())
         #KS o - switch to output
         self.keymap.bind("o", self.switch_to_output, ())
+        #KS w - toggle wrap output 
+        self.keymap.bind("w", self.toggle_output_wrap, ())
         #KS f - switch current pad full-screen
         self.keymap.bind("f", self.switch_current_pad_fullscreen, ())
         #KS r - reset layout
@@ -680,9 +719,14 @@ class Notebook(Help, Format):
         try:
           # PRINT PADS
           if self.valid == 0:
+            self.c.scr.erase()
+            self.c.scr.refresh()
+            self.clear_pads()
+            #self.c.scr.clear()
+            #self.c.scr.erase()
             self.status_line_valid = 0
             #self.c.scr.clear()
-            self.clear_pads()
+            #self.clear_pads()
             self.print_cell_input()
             self.print_cell_output()
             self.print_cell_execution_count()
@@ -695,7 +739,7 @@ class Notebook(Help, Format):
             self.print_bottom_bar()
             self.refresh_status_line()
             self.status_line_valid = 1
-          #self.c.scr.refresh()
+          self.c.scr.refresh()
         except Exception as e:
           log("[!] update_layout exception "+str(e))
           pass
@@ -922,6 +966,21 @@ class Notebook(Help, Format):
     def clear_output(self):
         self.current_cell.clear_output()
 
+    def toggle_markdown_cell(self):
+        #if self.current_cell.json["cell_type"] == "markdown":
+        #        self.current_cell.set_as_code()
+        #else:
+        #        self.current_cell.set_as_markdown()
+        #self.notebook.dirty = True
+        #self.current_cell.json["cell_type"] = "markdown"
+        #log("[*] "+str(self.current_cell.json["cell_type"]))
+        if self.current_cell.json["cell_type"]=="code":
+          self.current_cell.json["cell_type"]="markdown"
+        elif self.current_cell.json["cell_type"]=="markdown":
+          self.current_cell.json["cell_type"]="code"
+        self.dirty = True
+        self.valid = 0
+
     def markdown_cell(self):
         self.current_cell.set_as_markdown()
 
@@ -1035,16 +1094,17 @@ class Notebook(Help, Format):
                    }
                  except Exception as e:
                    log("[!] display data output error: " + str(e))
-
              #self.c.scr.addstr(3,0,f"Out:")
              #self.c.scr.addstr(4,0, "----")
              #self.c.scr.addstr(5,0,"{:>4d}".format(execution_count))
-
-             ##    text = rich_print(f"Out[{execution_count}]:", style="red", end="")
+             # text = rich_print(f"Out[{execution_count}]:", 
+             #   style="red", end=""
+             # )
              ## HERE 20220803
              #    self.executing_cells[
              #        execution_count
-             #    ].output_prefix.content = FormattedTextControl(text=ANSI(text))
+             #    ].output_prefix.content = 
+             # FormattedTextControl(text=ANSI(text))
              elif msg_type == "error":
                  #outputs.append(
                  outputs = {
@@ -1055,21 +1115,22 @@ class Notebook(Help, Format):
                  }
              else:
                  return
-             #self.executing_cells[execution_count].output.content = FormattedTextControl(
+             # self.executing_cells[execution_count].output.content 
+             # = FormattedTextControl(
              #    text=text
-             #)
+             # )
              log("[*] notebook.output_hook [received kernel output]")
              #self.current_cell.json["outputs"]=outputs
              self.executing_cells[execution_count].json["outputs"]=outputs
-             #self.c.pads[POU].clear()
-             #text, height = self.current_cell.get_output_text(outputs)
-             #self.print_cell_output()
-             #self.print_cell_execution_count(execution_count)
-             #self.focus(self.current_cell_idx, update_layout=True)
-             #shift=0
-             #linelen=0
-             #ecs=len(str(execution_count)) # execution count shift
-             ##log(str(ecs))
+             # self.c.pads[POU].clear()
+             # text, height = self.current_cell.get_output_text(outputs)
+             # self.print_cell_output()
+             # self.print_cell_execution_count(execution_count)
+             # self.focus(self.current_cell_idx, update_layout=True)
+             # shift=0
+             # linelen=0
+             # ecs=len(str(execution_count)) # execution count shift
+             # #log(str(ecs))
              #for lin in text.split('\n'):
              #  self.c.scr.move(3+shift,self.left_margin+ecs+1)
              #  self.c.scr.addstr(lin)
@@ -1157,3 +1218,4 @@ class Notebook(Help, Format):
         idx = self.marks[mark_no]
         self.focus(idx)
         self.editor_msg = "Goto Mark '" + str(chr(mark_no)) + "' @ cell " + str(idx)
+

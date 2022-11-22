@@ -3,7 +3,7 @@
 # MODULE : log
 #
 
-DEBUG = 0
+DEBUG = 1
 
 from sys import stdout 
 from datetime import datetime
@@ -35,7 +35,6 @@ def log(logstr):
         f.write("\n"+dt+"|Traceback:")
         f.write("\n"+str(exc)[:-1])
     f.close()
-  
 
 def caller(func):
   log("caller")
@@ -46,3 +45,4 @@ def caller(func):
   #log(f'caller instance: {caller_instance}')  # → obj
   #log(f'caller from class: {type(caller_instance).__name__}')  # → B
   #log(f'caller from method: {function}')  # → class_B_fun
+
